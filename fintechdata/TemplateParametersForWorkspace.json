@@ -1,0 +1,27 @@
+{
+	"$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"workspaceName": {
+			"value": "fintechdata"
+		},
+		"AzureSqlDatabase1_password": {
+			"value": ""
+		},
+		"fintechdata-WorkspaceDefaultSqlServer_connectionString": {
+			"value": "Integrated Security=False;Encrypt=True;Connection Timeout=30;Data Source=tcp:fintechdata.sql.azuresynapse.net,1433;Initial Catalog=@{linkedService().DBName}"
+		},
+		"AzureSqlDatabase1_properties_typeProperties_server": {
+			"value": "fintechproject.database.windows.net"
+		},
+		"AzureSqlDatabase1_properties_typeProperties_database": {
+			"value": "fintechdata"
+		},
+		"AzureSqlDatabase1_properties_typeProperties_userName": {
+			"value": "sqladminuser"
+		},
+		"fintechdata-WorkspaceDefaultStorage_properties_typeProperties_url": {
+			"value": "https://fintechproject.dfs.core.windows.net"
+		}
+	}
+}

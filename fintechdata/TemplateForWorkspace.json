@@ -1,0 +1,887 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"workspaceName": {
+			"type": "string",
+			"metadata": "Workspace name",
+			"defaultValue": "fintechdata"
+		},
+		"AzureSqlDatabase1_password": {
+			"type": "secureString",
+			"metadata": "Secure string for 'password' of 'AzureSqlDatabase1'"
+		},
+		"fintechdata-WorkspaceDefaultSqlServer_connectionString": {
+			"type": "secureString",
+			"metadata": "Secure string for 'connectionString' of 'fintechdata-WorkspaceDefaultSqlServer'",
+			"defaultValue": "Integrated Security=False;Encrypt=True;Connection Timeout=30;Data Source=tcp:fintechdata.sql.azuresynapse.net,1433;Initial Catalog=@{linkedService().DBName}"
+		},
+		"AzureSqlDatabase1_properties_typeProperties_server": {
+			"type": "string",
+			"defaultValue": "fintechproject.database.windows.net"
+		},
+		"AzureSqlDatabase1_properties_typeProperties_database": {
+			"type": "string",
+			"defaultValue": "fintechdata"
+		},
+		"AzureSqlDatabase1_properties_typeProperties_userName": {
+			"type": "string",
+			"defaultValue": "sqladminuser"
+		},
+		"fintechdata-WorkspaceDefaultStorage_properties_typeProperties_url": {
+			"type": "string",
+			"defaultValue": "https://fintechproject.dfs.core.windows.net"
+		}
+	},
+	"variables": {
+		"workspaceId": "[concat('Microsoft.Synapse/workspaces/', parameters('workspaceName'))]"
+	},
+	"resources": [
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintech')]",
+			"type": "Microsoft.Synapse/workspaces/bigDataPools",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"annotations": []
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintechdata')]",
+			"type": "Microsoft.Synapse/workspaces/sqlPools",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"annotations": []
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintechPipeline')]",
+			"type": "Microsoft.Synapse/workspaces/pipelines",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"activities": [
+					{
+						"name": "ForEach1",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "GetAllTableList",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('GetAllTableList').output.value",
+								"type": "Expression"
+							},
+							"activities": [
+								{
+									"name": "Copy data to Bronze folder",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderQuery": {
+												"value": "@{concat('SELECT * FROM ',item().SchemaName,'.',item().TableName)}",
+												"type": "Expression"
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "ParquetSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "ParquetWriteSettings"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "SQLSource",
+											"type": "DatasetReference",
+											"parameters": {}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "bronzeLayer",
+											"type": "DatasetReference",
+											"parameters": {
+												"tablename": {
+													"value": "@item().TableName",
+													"type": "Expression"
+												},
+												"schemaname": {
+													"value": "@item().SchemaName",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								}
+							]
+						}
+					},
+					{
+						"name": "Bronze to Silver Data Processing",
+						"type": "SynapseNotebook",
+						"dependsOn": [
+							{
+								"activity": "ForEach1",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebook": {
+								"referenceName": "bronzetosilver",
+								"type": "NotebookReference"
+							},
+							"snapshot": true,
+							"sparkPool": {
+								"referenceName": "fintech",
+								"type": "BigDataPoolReference"
+							},
+							"executorSize": "Small",
+							"conf": {
+								"spark.dynamicAllocation.enabled": true,
+								"spark.dynamicAllocation.minExecutors": 2,
+								"spark.dynamicAllocation.maxExecutors": 2
+							},
+							"driverSize": "Small",
+							"numExecutors": 2
+						}
+					},
+					{
+						"name": "Silver to Gold Data Processing",
+						"type": "SynapseNotebook",
+						"dependsOn": [
+							{
+								"activity": "Bronze to Silver Data Processing",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebook": {
+								"referenceName": "silvertogold",
+								"type": "NotebookReference"
+							},
+							"snapshot": true,
+							"sparkPool": {
+								"referenceName": "fintech",
+								"type": "BigDataPoolReference"
+							},
+							"executorSize": "Small",
+							"conf": {
+								"spark.dynamicAllocation.enabled": true,
+								"spark.dynamicAllocation.minExecutors": 2,
+								"spark.dynamicAllocation.maxExecutors": 2
+							},
+							"driverSize": "Small",
+							"numExecutors": 2
+						}
+					},
+					{
+						"name": "Success Email Notification",
+						"type": "WebActivity",
+						"dependsOn": [
+							{
+								"activity": "Silver to Gold Data Processing",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"method": "POST",
+							"headers": {},
+							"url": "https://prod-06.northeurope.logic.azure.com:443/workflows/8b724fb69b0e4d1485981718f5baef83/triggers/When_a_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_a_HTTP_request_is_received%2Frun&sv=1.0&sig=-UM7M-UmeZYkZyAVQA78A7LK47jYO2a_F2ZgEE6YxHs",
+							"connectVia": {
+								"referenceName": "AutoResolveIntegrationRuntime",
+								"type": "IntegrationRuntimeReference"
+							},
+							"body": {
+								"value": "{\n    \"to\" : \"@{pipeline().parameters.to}\",\n    \"subject\" : \"@{pipeline().parameters.subjectSuccess}\",\n    \"emailbody\" : \"@{pipeline().parameters.emailSuccess}\"\n}",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "Failed Email Notification",
+						"type": "WebActivity",
+						"dependsOn": [
+							{
+								"activity": "Silver to Gold Data Processing",
+								"dependencyConditions": [
+									"Failed"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"method": "POST",
+							"headers": {},
+							"url": "https://prod-06.northeurope.logic.azure.com:443/workflows/8b724fb69b0e4d1485981718f5baef83/triggers/When_a_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_a_HTTP_request_is_received%2Frun&sv=1.0&sig=-UM7M-UmeZYkZyAVQA78A7LK47jYO2a_F2ZgEE6YxHs",
+							"connectVia": {
+								"referenceName": "AutoResolveIntegrationRuntime",
+								"type": "IntegrationRuntimeReference"
+							},
+							"body": {
+								"value": "{\n    \"to\" : \"@{pipeline().parameters.to}\",\n    \"subject\" : \"@{pipeline().parameters.subjectFailed}\",\n    \"emailbody\" : \"@{pipeline().parameters.emailFailed}\"\n}",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "GetAllTableList",
+						"type": "Lookup",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderQuery": "SELECT \n    TABLE_SCHEMA AS SchemaName,\n    TABLE_NAME AS TableName\nFROM \n    INFORMATION_SCHEMA.TABLES\nWHERE \n    TABLE_TYPE = 'BASE TABLE' and TABLE_SCHEMA = 'fintech'\nORDER BY \n    SchemaName, TableName;",
+								"queryTimeout": "02:00:00",
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "SQLSource",
+								"type": "DatasetReference",
+								"parameters": {}
+							}
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"to": {
+						"type": "string",
+						"defaultValue": "archismansen8113@gmail.com"
+					},
+					"emailSuccess": {
+						"type": "string",
+						"defaultValue": "The data migration was successful "
+					},
+					"emailFailed": {
+						"type": "string",
+						"defaultValue": "The data migration has failed. Please call the support team."
+					},
+					"subjectSuccess": {
+						"type": "string",
+						"defaultValue": "Data Migration pipeline -> Success"
+					},
+					"subjectFailed": {
+						"type": "string",
+						"defaultValue": "Data Migration pipeline -> Failed"
+					}
+				},
+				"annotations": [],
+				"lastPublishTime": "2025-02-03T17:57:41Z"
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/notebooks/bronzetosilver')]",
+				"[concat(variables('workspaceId'), '/bigDataPools/fintech')]",
+				"[concat(variables('workspaceId'), '/notebooks/silvertogold')]",
+				"[concat(variables('workspaceId'), '/integrationRuntimes/AutoResolveIntegrationRuntime')]",
+				"[concat(variables('workspaceId'), '/datasets/SQLSource')]",
+				"[concat(variables('workspaceId'), '/datasets/bronzeLayer')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/SQLSource')]",
+			"type": "Microsoft.Synapse/workspaces/datasets",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "AzureSqlDatabase1",
+					"type": "LinkedServiceReference"
+				},
+				"annotations": [],
+				"type": "AzureSqlTable",
+				"schema": [],
+				"typeProperties": {}
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/linkedServices/AzureSqlDatabase1')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/bronzeLayer')]",
+			"type": "Microsoft.Synapse/workspaces/datasets",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "fintechdata-WorkspaceDefaultStorage",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"tablename": {
+						"type": "string"
+					},
+					"schemaname": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "Parquet",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@{concat(dataset().tablename,'.parquet')}",
+							"type": "Expression"
+						},
+						"folderPath": {
+							"value": "@{concat('bronze/',dataset().schemaname,'/',dataset().tablename)}",
+							"type": "Expression"
+						},
+						"fileSystem": "fintech"
+					},
+					"compressionCodec": "snappy"
+				},
+				"schema": []
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/linkedServices/fintechdata-WorkspaceDefaultStorage')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/AzureSqlDatabase1')]",
+			"type": "Microsoft.Synapse/workspaces/linkedServices",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"annotations": [],
+				"type": "AzureSqlDatabase",
+				"typeProperties": {
+					"server": "[parameters('AzureSqlDatabase1_properties_typeProperties_server')]",
+					"database": "[parameters('AzureSqlDatabase1_properties_typeProperties_database')]",
+					"encrypt": "mandatory",
+					"trustServerCertificate": true,
+					"authenticationType": "SQL",
+					"userName": "[parameters('AzureSqlDatabase1_properties_typeProperties_userName')]",
+					"password": {
+						"type": "SecureString",
+						"value": "[parameters('AzureSqlDatabase1_password')]"
+					}
+				},
+				"connectVia": {
+					"referenceName": "AutoResolveIntegrationRuntime",
+					"type": "IntegrationRuntimeReference"
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/integrationRuntimes/AutoResolveIntegrationRuntime')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintechdata-WorkspaceDefaultSqlServer')]",
+			"type": "Microsoft.Synapse/workspaces/linkedServices",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"parameters": {
+					"DBName": {
+						"type": "String"
+					}
+				},
+				"annotations": [],
+				"type": "AzureSqlDW",
+				"typeProperties": {
+					"connectionString": "[parameters('fintechdata-WorkspaceDefaultSqlServer_connectionString')]"
+				},
+				"connectVia": {
+					"referenceName": "AutoResolveIntegrationRuntime",
+					"type": "IntegrationRuntimeReference"
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/integrationRuntimes/AutoResolveIntegrationRuntime')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintechdata-WorkspaceDefaultStorage')]",
+			"type": "Microsoft.Synapse/workspaces/linkedServices",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"annotations": [],
+				"type": "AzureBlobFS",
+				"typeProperties": {
+					"url": "[parameters('fintechdata-WorkspaceDefaultStorage_properties_typeProperties_url')]"
+				},
+				"connectVia": {
+					"referenceName": "AutoResolveIntegrationRuntime",
+					"type": "IntegrationRuntimeReference"
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/integrationRuntimes/AutoResolveIntegrationRuntime')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/AutoResolveIntegrationRuntime')]",
+			"type": "Microsoft.Synapse/workspaces/integrationRuntimes",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"type": "Managed",
+				"typeProperties": {
+					"computeProperties": {
+						"location": "AutoResolve",
+						"dataFlowProperties": {
+							"computeType": "General",
+							"coreCount": 8,
+							"timeToLive": 0
+						}
+					}
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/WorkspaceSystemIdentity')]",
+			"type": "Microsoft.Synapse/workspaces/credentials",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"type": "ManagedIdentity",
+				"typeProperties": {}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/bronzetosilver')]",
+			"type": "Microsoft.Synapse/workspaces/notebooks",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"nbformat": 4,
+				"nbformat_minor": 2,
+				"bigDataPool": {
+					"referenceName": "fintech",
+					"type": "BigDataPoolReference"
+				},
+				"sessionProperties": {
+					"driverMemory": "28g",
+					"driverCores": 4,
+					"executorMemory": "28g",
+					"executorCores": 4,
+					"numExecutors": 2,
+					"runAsWorkspaceSystemIdentity": false,
+					"conf": {
+						"spark.dynamicAllocation.enabled": "false",
+						"spark.dynamicAllocation.minExecutors": "2",
+						"spark.dynamicAllocation.maxExecutors": "2",
+						"spark.autotune.trackingId": "916bb815-6371-4752-9b85-1bbc8d31e285"
+					}
+				},
+				"metadata": {
+					"saveOutput": true,
+					"synapse_widget": {
+						"version": "0.1"
+					},
+					"enableDebugMode": false,
+					"language_info": {
+						"name": "python"
+					},
+					"a365ComputeOptions": {
+						"id": "/subscriptions/9dddfee1-ac7d-4b47-97d9-91e20be0b05c/resourceGroups/FintechDataEngineeringProject/providers/Microsoft.Synapse/workspaces/fintechdata/bigDataPools/fintech",
+						"name": "fintech",
+						"type": "Spark",
+						"endpoint": "https://fintechdata.dev.azuresynapse.net/livyApi/versions/2019-11-01-preview/sparkPools/fintech",
+						"auth": {
+							"type": "AAD",
+							"authResource": "https://dev.azuresynapse.net",
+							"authHeader": null
+						},
+						"sparkVersion": "3.4",
+						"nodeCount": 3,
+						"cores": 4,
+						"memory": 28,
+						"extraHeader": null
+					},
+					"sessionKeepAliveTimeout": 30
+				},
+				"cells": [
+					{
+						"cell_type": "code",
+						"source": [
+							"from pyspark.sql.functions import *\r\n",
+							"\r\n",
+							"# Define paths\r\n",
+							"base_path = \"abfss://fintech@fintechproject.dfs.core.windows.net/bronze/fintech\"\r\n",
+							"output_base_path = \"abfss://fintech@fintechproject.dfs.core.windows.net/silver/fintech\"\r\n",
+							"\r\n",
+							"spark.conf.set(\"spark.databricks.delta.schema.autoMerge.enabled\", \"true\")\r\n",
+							"\r\n",
+							"# Transformation for Accounts dataset\r\n",
+							"def transform_accounts():\r\n",
+							"    df = spark.read.parquet(f\"{base_path}Accounts/Accounts.parquet\")\r\n",
+							"    # Example transformation: Calculate account age in years\r\n",
+							"    df_transformed = df.withColumn(\"AccountAgeYears\", \r\n",
+							"                                   round(datediff(current_date(), col(\"OpenDate\")) / 365.25, 2))\r\n",
+							"    df_transformed.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}Accounts/\")\r\n",
+							"\r\n",
+							"# Transformation for Customers dataset\r\n",
+							"def transform_customers():\r\n",
+							"    df = spark.read.parquet(f\"{base_path}Customers/Customers.parquet\")\r\n",
+							"    # Example transformation: Create a full name column and mask the email address\r\n",
+							"    df_transformed = df.withColumn(\"FullName\", concat_ws(\" \", col(\"FirstName\"), col(\"LastName\"))) \\\r\n",
+							"                       .withColumn(\"MaskedEmail\", \r\n",
+							"                                   concat(lit(\"***@\"), substring_index(col(\"Email\"), \"@\", -1)))\r\n",
+							"    df_transformed.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}Customers/\")\r\n",
+							"\r\n",
+							"# Transformation for Loans dataset with explicit casting\r\n",
+							"def transform_loans():\r\n",
+							"    df = spark.read.parquet(f\"{base_path}Loans/Loans.parquet\")\r\n",
+							"    # Example transformation: Calculate total interest with explicit casting to match the Delta table\r\n",
+							"    df_transformed = df.withColumn(\"TotalInterest\", \r\n",
+							"                                   (col(\"LoanAmount\") * col(\"InterestRate\") / 100).cast(\"decimal(28,8)\")) \\\r\n",
+							"                       .withColumn(\"LoanDurationYears\", \r\n",
+							"                                   round(datediff(col(\"LoanEndDate\"), col(\"LoanStartDate\")) / 365.25, 2))\r\n",
+							"    df_transformed.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}Loans/\")\r\n",
+							"\r\n",
+							"# Transformation for Payments dataset\r\n",
+							"def transform_payments():\r\n",
+							"    df = spark.read.parquet(f\"{base_path}Payments/Payments.parquet\")\r\n",
+							"    # Example transformation: Calculate days since last payment\r\n",
+							"    df_transformed = df.withColumn(\"DaysSinceLastPayment\", \r\n",
+							"                                   datediff(current_date(), col(\"PaymentDate\")))\r\n",
+							"    df_transformed.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}Payments/\")\r\n",
+							"\r\n",
+							"# Transformation for Transactions dataset\r\n",
+							"def transform_transactions():\r\n",
+							"    df = spark.read.parquet(f\"{base_path}Transactions/Transactions.parquet\")\r\n",
+							"    # Example transformation: Categorize transaction types\r\n",
+							"    df_transformed = df.withColumn(\"TransactionCategory\", \r\n",
+							"                                   when(col(\"TransactionType\") == \"Deposit\", \"Income\")\r\n",
+							"                                   .when(col(\"TransactionType\") == \"Withdrawal\", \"Expense\")\r\n",
+							"                                   .otherwise(\"Other\"))\r\n",
+							"    df_transformed.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}Transactions/\")\r\n",
+							"\r\n",
+							"# Process each table\r\n",
+							"transform_accounts()\r\n",
+							"transform_customers()\r\n",
+							"transform_loans()\r\n",
+							"transform_payments()\r\n",
+							"transform_transactions()\r\n",
+							"\r\n",
+							"print(\"Bronze To Silver Completed !!\")\r\n",
+							""
+						],
+						"outputs": []
+					}
+				]
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/silvertogold')]",
+			"type": "Microsoft.Synapse/workspaces/notebooks",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"nbformat": 4,
+				"nbformat_minor": 2,
+				"sessionProperties": {
+					"driverMemory": "28g",
+					"driverCores": 4,
+					"executorMemory": "28g",
+					"executorCores": 4,
+					"numExecutors": 2,
+					"runAsWorkspaceSystemIdentity": false,
+					"conf": {
+						"spark.dynamicAllocation.enabled": "false",
+						"spark.dynamicAllocation.minExecutors": "2",
+						"spark.dynamicAllocation.maxExecutors": "2",
+						"spark.autotune.trackingId": "9b32354d-efad-4136-b380-59af4dfcfade"
+					}
+				},
+				"metadata": {
+					"saveOutput": true,
+					"synapse_widget": {
+						"version": "0.1"
+					},
+					"enableDebugMode": false,
+					"language_info": {
+						"name": "python"
+					},
+					"sessionKeepAliveTimeout": 30
+				},
+				"cells": [
+					{
+						"cell_type": "code",
+						"source": [
+							"from pyspark.sql.functions import *\r\n",
+							"\r\n",
+							"# Define paths\r\n",
+							"silver_base_path = \"abfss://fintech@fintechproject.dfs.core.windows.net/silver/fintech\"\r\n",
+							"output_base_path = \"abfss://fintech@fintechproject.dfs.core.windows.net/gold/fintech\"\r\n",
+							"\r\n",
+							"# Load data from the silver layer\r\n",
+							"accounts_df = spark.read.format(\"delta\").load(f\"{silver_base_path}Accounts/\")\r\n",
+							"customers_df = spark.read.format(\"delta\").load(f\"{silver_base_path}Customers/\")\r\n",
+							"loans_df = spark.read.format(\"delta\").load(f\"{silver_base_path}Loans/\")\r\n",
+							"payments_df = spark.read.format(\"delta\").load(f\"{silver_base_path}Payments/\")\r\n",
+							"transactions_df = spark.read.format(\"delta\").load(f\"{silver_base_path}Transactions/\")\r\n",
+							"\r\n",
+							""
+						],
+						"outputs": []
+					},
+					{
+						"cell_type": "code",
+						"metadata": {
+							"jupyter": {
+								"source_hidden": false,
+								"outputs_hidden": false
+							},
+							"nteract": {
+								"transient": {
+									"deleting": false
+								}
+							}
+						},
+						"source": [
+							"dim_customers_df = customers_df.select(\r\n",
+							"    col(\"CustomerID\").alias(\"customer_id\"),\r\n",
+							"    col(\"FirstName\").alias(\"first_name\"),\r\n",
+							"    col(\"LastName\").alias(\"last_name\"),\r\n",
+							"    col(\"Email\").alias(\"email\"),\r\n",
+							"    col(\"PhoneNumber\").alias(\"phone_number\"),\r\n",
+							"    col(\"Address\").alias(\"address\"),\r\n",
+							"    col(\"City\").alias(\"city\"),\r\n",
+							"    col(\"State\").alias(\"state\"),\r\n",
+							"    col(\"Country\").alias(\"country\"),\r\n",
+							"    col(\"ZipCode\").alias(\"zip_code\"),\r\n",
+							"    col(\"SignupDate\").alias(\"signup_date\")\r\n",
+							")\r\n",
+							"\r\n",
+							"dim_customers_df.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}dim_customers/\")\r\n",
+							""
+						],
+						"outputs": []
+					},
+					{
+						"cell_type": "code",
+						"metadata": {
+							"jupyter": {
+								"source_hidden": false,
+								"outputs_hidden": false
+							},
+							"nteract": {
+								"transient": {
+									"deleting": false
+								}
+							}
+						},
+						"source": [
+							"dim_accounts_df = accounts_df.select(\r\n",
+							"    col(\"AccountID\").alias(\"account_id\"),\r\n",
+							"    col(\"AccountType\").alias(\"account_type\"),\r\n",
+							"    col(\"Balance\").alias(\"balance\"),\r\n",
+							"    col(\"OpenDate\").alias(\"open_date\"),\r\n",
+							"    col(\"AccountAgeYears\").alias(\"account_age_years\")\r\n",
+							")\r\n",
+							"\r\n",
+							"dim_accounts_df.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}dim_accounts/\")\r\n",
+							""
+						],
+						"outputs": []
+					},
+					{
+						"cell_type": "code",
+						"metadata": {
+							"jupyter": {
+								"source_hidden": false,
+								"outputs_hidden": false
+							},
+							"nteract": {
+								"transient": {
+									"deleting": false
+								}
+							}
+						},
+						"source": [
+							"dim_loans_df = loans_df.select(\r\n",
+							"    col(\"LoanID\").alias(\"loan_id\"),\r\n",
+							"    col(\"LoanType\").alias(\"loan_type\"),\r\n",
+							"    col(\"LoanAmount\").alias(\"loan_amount\"),\r\n",
+							"    col(\"InterestRate\").alias(\"interest_rate\"),\r\n",
+							"    col(\"LoanStartDate\").alias(\"loan_start_date\"),\r\n",
+							"    col(\"LoanEndDate\").alias(\"loan_end_date\"),\r\n",
+							"    col(\"TotalInterest\").alias(\"total_interest\"),\r\n",
+							"    col(\"LoanDurationYears\").alias(\"loan_duration_years\")\r\n",
+							")\r\n",
+							"\r\n",
+							"dim_loans_df.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}dim_loans/\")\r\n",
+							""
+						],
+						"outputs": []
+					},
+					{
+						"cell_type": "code",
+						"metadata": {
+							"jupyter": {
+								"source_hidden": false,
+								"outputs_hidden": false
+							},
+							"nteract": {
+								"transient": {
+									"deleting": false
+								}
+							}
+						},
+						"source": [
+							"fact_payments_df = payments_df \\\r\n",
+							"    .join(loans_df.select(\"LoanID\", \"CustomerID\"), \"LoanID\") \\\r\n",
+							"    .select(\r\n",
+							"        col(\"PaymentID\").alias(\"payment_id\"),\r\n",
+							"        col(\"LoanID\").alias(\"loan_id\"),\r\n",
+							"        col(\"CustomerID\").alias(\"customer_id\"),\r\n",
+							"        col(\"PaymentDate\").alias(\"payment_date\"),\r\n",
+							"        col(\"PaymentAmount\").alias(\"payment_amount\"),\r\n",
+							"        col(\"PaymentMethod\").alias(\"payment_method\")\r\n",
+							"    )\r\n",
+							"\r\n",
+							"fact_payments_df.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}fact_payments/\")\r\n",
+							""
+						],
+						"outputs": []
+					},
+					{
+						"cell_type": "code",
+						"metadata": {
+							"jupyter": {
+								"source_hidden": false,
+								"outputs_hidden": false
+							},
+							"nteract": {
+								"transient": {
+									"deleting": false
+								}
+							}
+						},
+						"source": [
+							"fact_transactions_df = transactions_df \\\r\n",
+							"    .join(accounts_df.select(\"AccountID\", \"CustomerID\"), \"AccountID\") \\\r\n",
+							"    .select(\r\n",
+							"        col(\"TransactionID\").alias(\"transaction_id\"),\r\n",
+							"        col(\"AccountID\").alias(\"account_id\"),\r\n",
+							"        col(\"CustomerID\").alias(\"customer_id\"),\r\n",
+							"        col(\"TransactionDate\").alias(\"transaction_date\"),\r\n",
+							"        col(\"Amount\").alias(\"amount\"),\r\n",
+							"        col(\"TransactionType\").alias(\"transaction_type\"),\r\n",
+							"        col(\"Description\").alias(\"description\")\r\n",
+							"    )\r\n",
+							"\r\n",
+							"fact_transactions_df.write.format(\"delta\").mode(\"overwrite\").save(f\"{output_base_path}fact_transactions/\")\r\n",
+							""
+						],
+						"outputs": []
+					}
+				]
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintech')]",
+			"type": "Microsoft.Synapse/workspaces/bigDataPools",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"autoPause": {
+					"enabled": true,
+					"delayInMinutes": 15
+				},
+				"autoScale": {
+					"enabled": false,
+					"maxNodeCount": 10,
+					"minNodeCount": 3
+				},
+				"nodeCount": 3,
+				"nodeSize": "Small",
+				"nodeSizeFamily": "MemoryOptimized",
+				"sparkVersion": "3.4",
+				"isComputeIsolationEnabled": false,
+				"sessionLevelPackagesEnabled": false,
+				"annotations": []
+			},
+			"dependsOn": [],
+			"location": "northeurope"
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/fintechdata')]",
+			"type": "Microsoft.Synapse/workspaces/sqlPools",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"collation": "SQL_Latin1_General_CP1_CI_AS",
+				"maxSizeBytes": 263882790666240,
+				"annotations": []
+			},
+			"dependsOn": [],
+			"location": "northeurope"
+		}
+	]
+}
