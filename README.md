@@ -4,7 +4,8 @@
 This project implements a comprehensive data migration solution, moving financial data from a traditional SQL Server database to a modern cloud-based Azure architecture. The solution leverages Azure's Lakehouse architecture and implements automated ETL processes using Azure Synapse Analytics.
 
 ## Architecture
-![Architecture Diagram](media/image1.png)
+![Concept map](https://github.com/user-attachments/assets/d9e5ac14-f2b7-47ee-912e-cb86f6c00bdd)
+
 
 The data migration and transformation process follows the medallion architecture with three distinct layers:
 
