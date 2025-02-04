@@ -65,6 +65,13 @@ The initial data extraction process was optimized using dynamic pipeline activit
    - Challenge: Connection issues between various Azure services
    - Solution: Implemented robust error handling and retry mechanisms
 
+3. **Lookup Activity Data Retrieval**
+- Challenge: Lookup activity only retrieved one table when multiple tables were present
+- Solution:
+  - Truncated and re-populated the tables
+  - Created a new linked service with Synapse
+  - Verified proper table metadata synchronization
+
 ## Project Outcomes
 - Successfully implemented a scalable Lakehouse architecture
 - Automated end-to-end data migration processes
